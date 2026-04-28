@@ -63,7 +63,7 @@ body {
 /* ===== Stats ===== */
 .stats {
     display: grid;
-    grid-template-columns: repeat(5, 1fr);
+    grid-template-columns: repeat(6, 1fr);
     gap: 16px;
     margin-bottom: 24px;
 }
@@ -180,6 +180,25 @@ td.empty { text-align: center; color: var(--muted); padding: 24px; }
 }
 .badge.ok { background: #d1fae5; color: #065f46; }
 .badge.warn { background: #fee2e2; color: #991b1b; }
+.badge.discount { background: #fef3c7; color: #92400e; }
+
+.stat .value.sale { color: #d97706; }
+
+.price-with-discount {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+    line-height: 1.25;
+}
+.price-original {
+    font-size: 12px;
+    color: var(--muted);
+    text-decoration: line-through;
+}
+.price-now {
+    font-weight: 600;
+}
 
 /* ===== Form ===== */
 .form-row {
@@ -189,7 +208,7 @@ td.empty { text-align: center; color: var(--muted); padding: 24px; }
 }
 .form-grid {
     display: grid;
-    grid-template-columns: 2fr 1.2fr 1fr 1fr auto;
+    grid-template-columns: 2fr 1.2fr 1fr 1fr 1fr auto;
     gap: 12px;
     align-items: center;
 }

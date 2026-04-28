@@ -38,9 +38,25 @@ function ColorTag({ color }) {
     );
 }
 
+function PriceCell({ price, discount }) {
+    const original = Number(price) || 0;
+    const d = Number(discount) || 0;
+    if (d <= 0) {
+        return <span className="money">{fmtTHB(original)}</span>;
+    }
+    const effective = original * (1 - d / 100);
+    return (
+        <span className="price-with-discount">
+            <span className="price-original">{fmtTHB(original)}</span>
+            <span className="price-now money">{fmtTHB(effective)}</span>
+            <span className="badge discount">-{d}%</span>
+        </span>
+    );
+}
+
 export default function App() {
     const [products, setProducts] = useState([]);
-    const [form, setForm] = useState({ name: '', qty: '', price: '', color: '' });
+    const [form, setForm] = useState({ name: '', qty: '', price: '', discount: '', color: '' });
     const [err, setErr] = useState('');
     const [editing, setEditing] = useState(null);
     const [filterColor, setFilterColor] = useState('');
@@ -85,14 +101,17 @@ export default function App() {
         if (!Number.isFinite(q) || q < 0) return setErr('qty ต้องเป็นจำนวนเต็ม >= 0');
         const p = form.price === '' ? 0 : parseFloat(form.price);
         if (!Number.isFinite(p) || p < 0) return setErr('ราคาต้อง >= 0');
+        const d = form.discount === '' ? 0 : parseFloat(form.discount);
+        if (!Number.isFinite(d) || d < 0 || d > 100) return setErr('ส่วนลดต้องอยู่ระหว่าง 0-100');
         try {
             await addProduct({
                 name: form.name.trim(),
                 qty: q,
                 price: p,
+                discount_percent: d,
                 color: form.color.trim() || null,
             });
-            setForm({ name: '', qty: '', price: '', color: '' });
+            setForm({ name: '', qty: '', price: '', discount: '', color: '' });
             await refresh();
         } catch (e) {
             setErr('เพิ่มสินค้าล้มเหลว: ' + e.message);
@@ -134,8 +153,12 @@ export default function App() {
     const totalQty = products.reduce((s, p) => s + p.qty, 0);
     const totalSold = products.reduce((s, p) => s + (p.sold_count || 0), 0);
     const lowCount = products.filter((p) => p.qty < 5).length;
+    const onSaleCount = products.filter((p) => Number(p.discount_percent) > 0).length;
     const stockValue = products.reduce(
-        (s, p) => s + Number(p.qty) * Number(p.price || 0),
+        (s, p) => {
+            const eff = Number(p.price || 0) * (1 - Number(p.discount_percent || 0) / 100);
+            return s + Number(p.qty) * eff;
+        },
         0
     );
 
@@ -164,8 +187,12 @@ export default function App() {
                     <div className="value">{totalSold}</div>
                 </div>
                 <div className="stat">
-                    <div className="label">มูลค่าสต็อก</div>
+                    <div className="label">มูลค่าสต็อก (หลังส่วนลด)</div>
                     <div className="value money">{fmtTHB(stockValue)}</div>
+                </div>
+                <div className="stat">
+                    <div className="label">กำลังลดราคา</div>
+                    <div className={'value' + (onSaleCount > 0 ? ' sale' : '')}>{onSaleCount}</div>
                 </div>
                 <div className="stat">
                     <div className="label">ใกล้หมด (qty &lt; 5)</div>
@@ -211,7 +238,9 @@ export default function App() {
                                     <td>{p.id}</td>
                                     <td>{p.name}</td>
                                     <td><ColorTag color={p.color} /></td>
-                                    <td className="num money">{fmtTHB(p.price)}</td>
+                                    <td className="num">
+                                        <PriceCell price={p.price} discount={p.discount_percent} />
+                                    </td>
                                     <td className="num">{p.qty}</td>
                                     <td className="num">{p.sold_count}</td>
                                     <td>
@@ -247,6 +276,9 @@ export default function App() {
                     <input className="input" type="number" min="0" step="0.01" placeholder="ราคา"
                            value={form.price}
                            onChange={(e) => setForm({ ...form, price: e.target.value })} />
+                    <input className="input" type="number" min="0" max="100" step="0.5" placeholder="ส่วนลด %"
+                           value={form.discount}
+                           onChange={(e) => setForm({ ...form, discount: e.target.value })} />
                     <input className="input" type="number" min="0" placeholder="จำนวน"
                            value={form.qty}
                            onChange={(e) => setForm({ ...form, qty: e.target.value })} />
@@ -313,6 +345,7 @@ function EditModal({ product, onClose, onSaved, onError }) {
         name: product.name,
         qty: String(product.qty),
         price: String(product.price ?? 0),
+        discount: String(product.discount_percent ?? 0),
         color: product.color ?? '',
     });
     const [saving, setSaving] = useState(false);
@@ -321,15 +354,18 @@ function EditModal({ product, onClose, onSaved, onError }) {
         e.preventDefault();
         const q = parseInt(form.qty, 10);
         const p = form.price === '' ? 0 : parseFloat(form.price);
+        const d = form.discount === '' ? 0 : parseFloat(form.discount);
         if (!form.name.trim()) return onError('กรุณากรอกชื่อสินค้า');
         if (!Number.isFinite(q) || q < 0) return onError('qty ต้องเป็นจำนวนเต็ม >= 0');
         if (!Number.isFinite(p) || p < 0) return onError('ราคาต้อง >= 0');
+        if (!Number.isFinite(d) || d < 0 || d > 100) return onError('ส่วนลดต้อง 0-100');
         setSaving(true);
         try {
             await updateProduct(product.id, {
                 name: form.name.trim(),
                 qty: q,
                 price: p,
+                discount_percent: d,
                 color: form.color.trim() || null,
             });
             await onSaved();
@@ -362,6 +398,11 @@ function EditModal({ product, onClose, onSaved, onError }) {
                         <span>ราคา (บาท)</span>
                         <input className="input" type="number" min="0" step="0.01" value={form.price}
                                onChange={(e) => setForm({ ...form, price: e.target.value })} />
+                    </label>
+                    <label className="field">
+                        <span>ส่วนลด (%) — 0-100</span>
+                        <input className="input" type="number" min="0" max="100" step="0.5" value={form.discount}
+                               onChange={(e) => setForm({ ...form, discount: e.target.value })} />
                     </label>
                     <label className="field">
                         <span>จำนวนคงเหลือ</span>

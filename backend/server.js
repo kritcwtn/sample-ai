@@ -7,7 +7,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const COLS = 'id, name, qty, sold_count, price, color, created_at';
+const COLS = 'id, name, qty, sold_count, price, discount_percent, color, created_at';
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
@@ -39,7 +39,7 @@ app.get('/products/low-stock', async (_req, res) => {
 
 // POST /products  → add new
 app.post('/products', async (req, res) => {
-    const { name, qty, price, color } = req.body || {};
+    const { name, qty, price, discount_percent, color } = req.body || {};
     if (!name || typeof name !== 'string') {
         return res.status(400).json({ error: 'name_required' });
     }
@@ -54,14 +54,23 @@ app.post('/products', async (req, res) => {
             return res.status(400).json({ error: 'price_invalid' });
         }
     }
+    let discountNum = 0;
+    if (discount_percent !== undefined && discount_percent !== '' && discount_percent !== null) {
+        discountNum = typeof discount_percent === 'number'
+            ? discount_percent
+            : parseFloat(discount_percent);
+        if (!Number.isFinite(discountNum) || discountNum < 0 || discountNum > 100) {
+            return res.status(400).json({ error: 'discount_invalid' });
+        }
+    }
     const colorVal =
         typeof color === 'string' && color.trim() !== '' ? color.trim() : null;
 
     try {
         const { rows } = await pool.query(
-            `INSERT INTO products (name, qty, price, color)
-             VALUES ($1, $2, $3, $4) RETURNING ${COLS}`,
-            [name.trim(), qtyNum, priceNum, colorVal]
+            `INSERT INTO products (name, qty, price, discount_percent, color)
+             VALUES ($1, $2, $3, $4, $5) RETURNING ${COLS}`,
+            [name.trim(), qtyNum, priceNum, discountNum, colorVal]
         );
         res.status(201).json(rows[0]);
     } catch (err) {
@@ -75,7 +84,7 @@ app.put('/products/:id', async (req, res) => {
     const id = parseInt(req.params.id, 10);
     if (!Number.isFinite(id)) return res.status(400).json({ error: 'invalid_id' });
 
-    const { name, qty, price, color } = req.body || {};
+    const { name, qty, price, discount_percent, color } = req.body || {};
     const fields = [];
     const values = [];
     let n = 1;
@@ -103,6 +112,17 @@ app.put('/products/:id', async (req, res) => {
         }
         fields.push(`price = $${n++}`);
         values.push(priceNum);
+    }
+    if (discount_percent !== undefined) {
+        const dNum =
+            typeof discount_percent === 'number'
+                ? discount_percent
+                : parseFloat(discount_percent);
+        if (!Number.isFinite(dNum) || dNum < 0 || dNum > 100) {
+            return res.status(400).json({ error: 'discount_invalid' });
+        }
+        fields.push(`discount_percent = $${n++}`);
+        values.push(dNum);
     }
     if (color !== undefined) {
         const colorVal =
