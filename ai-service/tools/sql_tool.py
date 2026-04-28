@@ -106,7 +106,7 @@ def _shorten(s: str, n: int = 200) -> str:
 
 # ---- queries ------------------------------------------------------------
 
-_BASE_COLS = "id, name, qty, sold_count, price, color"
+_BASE_COLS = "id, name, qty, sold_count, price, discount_percent, color"
 
 
 def all_products(limit: int = 100) -> list[dict]:
@@ -200,9 +200,27 @@ def total_sold() -> dict:
 
 
 def total_stock_value() -> dict:
-    """SUM(qty * price) — total inventory value at current prices."""
-    rows = _query("SELECT COALESCE(SUM(qty * price), 0)::float AS total FROM products")
+    """SUM(qty * effective_price) — inventory value after discounts applied."""
+    rows = _query(
+        "SELECT COALESCE(SUM(qty * price * (1 - discount_percent/100)), 0)::float AS total "
+        "FROM products"
+    )
     return {"metric": "total_stock_value", "value": float(rows[0]["total"]) if rows else 0.0}
+
+
+def discounted_products(min_discount: float = 0.01, limit: int = 50) -> list[dict]:
+    """All products currently on promotion (discount_percent > min_discount)."""
+    min_discount = clamp_float(min_discount, 0, 100, default=0.01)
+    limit = clamp_int(limit, 1, 200, default=50)
+    return _query(
+        f"""
+        SELECT {_BASE_COLS} FROM products
+        WHERE discount_percent >= %s
+        ORDER BY discount_percent DESC, price ASC
+        LIMIT %s
+        """,
+        (min_discount, limit),
+    )
 
 
 def total_revenue() -> dict:

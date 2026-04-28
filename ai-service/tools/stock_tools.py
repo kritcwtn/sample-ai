@@ -23,7 +23,11 @@ from . import sql_tool
 
 
 # Whitelist of fields that may ever appear in tool output.
-_ALLOWED = {"id", "name", "qty", "sold_count", "price", "color"}
+_ALLOWED = {
+    "id", "name", "qty", "sold_count",
+    "price", "discount_percent", "effective_price",
+    "color",
+}
 
 
 def _safe_rows(rows: list[dict]) -> list[dict]:
@@ -31,8 +35,14 @@ def _safe_rows(rows: list[dict]) -> list[dict]:
     for r in rows:
         clean = {k: v for k, v in r.items() if k in _ALLOWED}
         # Decimal → float so JSON serialisation works.
-        if "price" in clean and clean["price"] is not None:
-            clean["price"] = float(clean["price"])
+        for k in ("price", "discount_percent"):
+            if k in clean and clean[k] is not None:
+                clean[k] = float(clean[k])
+        # Add computed effective_price for LLM convenience.
+        if "price" in clean and "discount_percent" in clean:
+            clean["effective_price"] = round(
+                clean["price"] * (1 - clean["discount_percent"] / 100), 2
+            )
         out.append(clean)
     return out
 
@@ -433,6 +443,38 @@ class GetTotalRevenue(BaseTool):
         return sql_tool.total_revenue()
 
 
+class GetDiscountedProducts(BaseTool):
+    name = "get_discounted_products"
+    description = (
+        "Get products that are currently on promotion (have a non-zero discount), "
+        "sorted by discount percent (highest first).\n"
+        "\n"
+        "When to use:\n"
+        "  - 'สินค้าลดราคา', 'มีโปรไหม', 'sale', 'on promotion', 'discount items'.\n"
+        "When NOT to use:\n"
+        "  - For all products → use list_products.\n"
+        "  - For just the cheapest items (regardless of discount) → use get_cheapest.\n"
+        "Arguments:\n"
+        "  - min_discount: only items with discount_percent >= this value (0-100, default 0.01).\n"
+        "  - limit: max rows (1-200, default 50).\n"
+        "Returns:\n"
+        "  - items include both `price` (original) and `effective_price` (after discount).\n"
+        "Examples:\n"
+        "  - 'สินค้าลดราคามีอะไรบ้าง'  → {}\n"
+        "  - 'สินค้าลดเกิน 20%'        → {\"min_discount\": 20}"
+    )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "min_discount": {"type": "number", "minimum": 0, "maximum": 100, "default": 0.01},
+            "limit":        {"type": "integer", "minimum": 1, "maximum": 200, "default": 50},
+        },
+    }
+
+    def run(self, min_discount: float = 0.01, limit: int = 50) -> list[dict]:
+        return _safe_rows(sql_tool.discounted_products(min_discount, limit))
+
+
 _ALL_TOOLS: tuple[type[BaseTool], ...] = (
     ListProducts,
     GetLowStock,
@@ -448,6 +490,7 @@ _ALL_TOOLS: tuple[type[BaseTool], ...] = (
     GetByPriceRange,
     GetMostExpensive,
     GetCheapest,
+    GetDiscountedProducts,
     GetCriticalAlerts,
 )
 
