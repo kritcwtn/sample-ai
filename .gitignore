@@ -1,0 +1,79 @@
+# =============================================
+# Stock Project — root .gitignore
+# Covers: Node (backend, frontend) + Python (ai-service)
+# =============================================
+
+# ----- Secrets / env -----
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# ----- Node.js -----
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+
+# ----- Vite / React build output -----
+dist/
+dist-ssr/
+.vite/
+*.local
+
+# ----- Python -----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
+env/
+.Python
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.coverage
+htmlcov/
+
+# ----- Logs -----
+*.log
+logs/
+ai-service.log
+ai-service.log.*
+
+# ----- Editor / IDE -----
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ----- OS -----
+.DS_Store
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# ----- Project temp / scratch -----
+# Convention: anything that starts with `_` in service roots is throwaway.
+ai-service/_*.py
+backend/_*.js
+frontend/_*.js
+_test_payload.json
+_*.json
+
+# ----- Database dumps (do not commit data) -----
+*.dump
+*.sql.gz
+*.bak
+
+# ----- Misc -----
+New folder/
+**/Thumbs.db
