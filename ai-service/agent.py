@@ -16,6 +16,7 @@ plus one per tool invocation, in chronological order.
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from dataclasses import asdict, dataclass, field
@@ -24,6 +25,15 @@ from typing import Any
 from core.logging_setup import get_logger, safe_extra
 from llm.base import LLMProvider
 from tools.base import ToolRegistry, ToolValidationError
+
+
+def _max_sentences() -> int:
+    """Read ANSWER_MAX_SENTENCES from env (clamp 1..20, default 3)."""
+    raw = os.getenv("ANSWER_MAX_SENTENCES", "3")
+    try:
+        return max(1, min(20, int(raw)))
+    except (TypeError, ValueError):
+        return 3
 
 log = get_logger(__name__)
 
@@ -57,6 +67,26 @@ def _strip_tool_leaks(text: str) -> str:
     return text
 
 
+# Sentence boundary heuristic — Thai has no whitespace between words and
+# rarely uses Western punctuation, so we use multiple separators.
+_SENT_SPLIT_RE = re.compile(r"(?<=[.!?。！？])\s+|(?<=[.!?])(?=\S)|\n+")
+
+
+def _truncate_sentences(text: str, max_n: int) -> str:
+    """Keep at most max_n sentences. Sentences are separated by .!?, Asian
+    full stops, or newlines. Bullet/numbered list items count as one sentence."""
+    if not text or max_n <= 0:
+        return text
+    parts = [s.strip() for s in _SENT_SPLIT_RE.split(text) if s and s.strip()]
+    if len(parts) <= max_n:
+        return text.strip()
+    kept = " ".join(parts[:max_n]).rstrip()
+    # Restore terminal punctuation if missing
+    if not kept.endswith((".", "!", "?", "。", "！", "？")):
+        kept += "."
+    return kept
+
+
 def _strip_cjk(text: str) -> str:
     if not text:
         return ""
@@ -69,7 +99,8 @@ def _strip_cjk(text: str) -> str:
         thai_blocks = [b for b in blocks if _THAI_RE.search(b)]
         if thai_blocks:
             cleaned = thai_blocks[-1]
-    return _strip_tool_leaks(cleaned)
+    cleaned = _strip_tool_leaks(cleaned)
+    return _truncate_sentences(cleaned, _max_sentences())
 
 
 # ---- domain prompt ------------------------------------------------------
@@ -98,7 +129,7 @@ politely refuse in Thai WITHOUT calling any tool.
 - NEVER mention tool names in the final answer (no `get_low_stock`, \
 `search_products`, function-call syntax, JSON, code blocks, or `tool_use`). \
 Speak as if you simply know the answer.
-- Be concise: 1-3 sentences.
+- Be concise: maximum {max_sentences} sentence(s) — strictly enforced.
 """
 
 _RULES_SQL = """\
@@ -123,7 +154,8 @@ RULES:
 - NEVER mention tool names (`get_db_schema`, `execute_sql`), the SQL itself, \
 column names, or any internal jargon in the final answer. Speak naturally as \
 if you simply know the answer.
-- Respond ONLY in Thai. No Chinese/Japanese/Korean characters. Concise: 1-3 sentences.
+- Respond ONLY in Thai. No Chinese/Japanese/Korean characters. Maximum \
+{max_sentences} sentence(s) — strictly enforced.
 """
 
 _RULES_HYBRID = """\
@@ -148,7 +180,8 @@ OTHER RULES:
 - NEVER mention tool names (`get_low_stock`, `search_products`, `execute_sql`, \
 etc.), function-call syntax, JSON, code blocks, SQL, or internal jargon in the \
 final answer. Speak naturally as if you simply know the answer.
-- Respond ONLY in Thai. No CJK characters. 1-3 sentences.
+- Respond ONLY in Thai. No CJK characters. Maximum {max_sentences} sentence(s) \
+— strictly enforced.
 """
 
 _RULES_BY_MODE = {
@@ -159,7 +192,9 @@ _RULES_BY_MODE = {
 
 
 def build_system_prompt(registry: ToolRegistry, mode: str = "tools") -> str:
-    rules = _RULES_BY_MODE.get(mode, _RULES_TOOLS)
+    rules = _RULES_BY_MODE.get(mode, _RULES_TOOLS).format(
+        max_sentences=_max_sentences()
+    )
     return f"{rules}\nAVAILABLE TOOLS:\n{registry.summary()}\n"
 
 
