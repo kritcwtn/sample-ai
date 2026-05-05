@@ -20,8 +20,10 @@ log = get_logger(__name__)
 
 from agent import Agent, steps_as_dicts  # noqa: E402
 from llm import get_llm  # noqa: E402
-from tools import stock_tools  # noqa: E402
+from tools import stock_tools, sql_agent_tools  # noqa: E402
 from tools.base import ToolRegistry  # noqa: E402
+
+AGENT_MODE = os.getenv("AGENT_MODE", "tools").strip().lower()
 
 
 app = FastAPI(title="Stock AI Service (tool-calling agent)")
@@ -56,13 +58,25 @@ async def request_id_middleware(request: Request, call_next):
     return response
 
 
-# ----- one registry per service -----
+# ----- one registry per service, populated by AGENT_MODE -----
 registry = ToolRegistry()
-stock_tools.register_all(registry)
+
+if AGENT_MODE == "sql":
+    # Pure text-to-SQL: only schema introspection + execute_sql.
+    sql_agent_tools.register_all(registry)
+elif AGENT_MODE == "hybrid":
+    # Best of both: predefined tools first, with SQL escape hatch.
+    stock_tools.register_all(registry)
+    sql_agent_tools.register_all(registry)
+else:
+    # Default 'tools': predefined domain tools only (safest, fastest, most accurate).
+    stock_tools.register_all(registry)
+
+log.info("agent.boot", extra={"mode": AGENT_MODE, "tools": len(registry.names())})
 
 
 def make_agent() -> Agent:
-    return Agent(llm=get_llm(), registry=registry)
+    return Agent(llm=get_llm(), registry=registry, mode=AGENT_MODE)
 
 
 class ChatRequest(BaseModel):
@@ -80,6 +94,7 @@ def health() -> dict:
     return {
         "ok": True,
         "provider": os.getenv("LLM_PROVIDER", "ollama"),
+        "mode": AGENT_MODE,
         "tools": registry.names(),
     }
 

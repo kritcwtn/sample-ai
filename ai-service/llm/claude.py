@@ -26,6 +26,7 @@ class ClaudeProvider(LLMProvider):
 
     def chat(self, messages: list[dict], tools: list[dict] | None = None) -> ChatTurn:
         # Anthropic's tool format differs slightly; flatten OpenAI-style schemas.
+        # Mark the LAST tool with cache_control to cache the whole tool catalogue.
         anth_tools = None
         if tools:
             anth_tools = [
@@ -36,6 +37,10 @@ class ClaudeProvider(LLMProvider):
                 }
                 for t in tools
             ]
+            # Cache the tools array — first hit is normal price, subsequent hits
+            # within ~5 min read from cache (90% cheaper, much faster).
+            if anth_tools:
+                anth_tools[-1] = {**anth_tools[-1], "cache_control": {"type": "ephemeral"}}
 
         # Translate OpenAI-style messages → Anthropic format.
         anth_messages: list[dict] = []
@@ -75,8 +80,13 @@ class ClaudeProvider(LLMProvider):
             "max_tokens": 1024,
             "messages": anth_messages,
         }
+        # System prompt as a cacheable block (saves ~2k tokens × every request).
         if system_text:
-            kwargs["system"] = system_text
+            kwargs["system"] = [{
+                "type": "text",
+                "text": system_text,
+                "cache_control": {"type": "ephemeral"},
+            }]
         if anth_tools:
             kwargs["tools"] = anth_tools
 

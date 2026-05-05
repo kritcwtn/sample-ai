@@ -29,6 +29,13 @@ class OllamaProvider(LLMProvider):
     def __init__(self) -> None:
         self.url = os.getenv("OLLAMA_URL", "http://localhost:11434")
         self.model = os.getenv("OLLAMA_MODEL", "qwen2.5:14b")
+        # How long Ollama keeps the model in memory between requests.
+        # Accepts "-1" (forever), "5m", "30m", "1h", or seconds as int string.
+        ka = os.getenv("OLLAMA_KEEP_ALIVE", "5m").strip()
+        try:
+            self.keep_alive: int | str = int(ka)
+        except ValueError:
+            self.keep_alive = ka
 
     # ----- legacy single-shot path -----
     def generate(self, prompt: str) -> str:
@@ -38,6 +45,7 @@ class OllamaProvider(LLMProvider):
                 "model": self.model,
                 "prompt": prompt,
                 "stream": False,
+                "keep_alive": self.keep_alive,
                 "options": {"temperature": 0, "top_p": 0.9, "num_ctx": 4096},
             },
             timeout=300.0,
@@ -51,6 +59,7 @@ class OllamaProvider(LLMProvider):
             "model": self.model,
             "messages": messages,
             "stream": False,
+            "keep_alive": self.keep_alive,
             "options": {"temperature": 0, "num_ctx": 8192},
         }
         if tools:

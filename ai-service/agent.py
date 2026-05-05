@@ -35,6 +35,28 @@ _CJK_RE = re.compile(
 _THAI_RE = re.compile(r"[฀-๿]")
 
 
+# Tool-name leakage patterns: snake_case identifiers that look like our tools
+# or framework chatter that occasionally bleeds into the user-facing answer.
+_TOOL_LEAK_PATTERNS = [
+    re.compile(r"<tool_call>.*?</tool_call>", re.DOTALL | re.IGNORECASE),
+    re.compile(r"<tool_use>.*?</tool_use>", re.DOTALL | re.IGNORECASE),
+    re.compile(r"```(?:json|sql|python)?\s.*?```", re.DOTALL),
+    # bare snake_case tool refs e.g. "get_low_stock", "search_products_by_name"
+    re.compile(r"\b(?:get|list|find|search|execute)_[a-z_]+\b\(?[^)\n]*\)?"),
+    # function-call-like fragments: foo(arg=1)
+    re.compile(r"\b[a-z_]{3,}\(\s*[^)]*\)"),
+]
+
+
+def _strip_tool_leaks(text: str) -> str:
+    for rx in _TOOL_LEAK_PATTERNS:
+        text = rx.sub("", text)
+    # collapse extra whitespace introduced by removals
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    return text
+
+
 def _strip_cjk(text: str) -> str:
     if not text:
         return ""
@@ -46,13 +68,13 @@ def _strip_cjk(text: str) -> str:
         blocks = [b.strip() for b in cleaned.split("\n\n") if b.strip()]
         thai_blocks = [b for b in blocks if _THAI_RE.search(b)]
         if thai_blocks:
-            return thai_blocks[-1]
-    return cleaned
+            cleaned = thai_blocks[-1]
+    return _strip_tool_leaks(cleaned)
 
 
 # ---- domain prompt ------------------------------------------------------
 
-_SYSTEM_RULES = """\
+_RULES_TOOLS = """\
 You are a stock-management assistant.
 
 RULES (must follow):
@@ -73,12 +95,72 @@ suggest the user check spelling.
 - For questions unrelated to stock/products (weather, recipes, math, coding): \
 politely refuse in Thai WITHOUT calling any tool.
 - Respond ONLY in Thai. Do NOT include Chinese, Japanese, or Korean characters.
+- NEVER mention tool names in the final answer (no `get_low_stock`, \
+`search_products`, function-call syntax, JSON, code blocks, or `tool_use`). \
+Speak as if you simply know the answer.
 - Be concise: 1-3 sentences.
 """
 
+_RULES_SQL = """\
+You are a stock-management SQL analyst.
 
-def build_system_prompt(registry: ToolRegistry) -> str:
-    return f"{_SYSTEM_RULES}\nAVAILABLE TOOLS:\n{registry.summary()}\n"
+WORKFLOW:
+1. Call get_db_schema() FIRST to understand the tables and columns.
+2. Compose a SELECT query (single statement, with LIMIT) using only the \
+allowed tables: products, categories, brands, suppliers, warehouses, \
+product_locations, customers, orders, order_items, stock_movements.
+3. Call execute_sql(sql=...) to run the query.
+4. Read the rows and answer the user in Thai.
+
+RULES:
+- SELECT only — never INSERT/UPDATE/DELETE/DDL. The tool will reject those.
+- Always include LIMIT (≤200).
+- Use ILIKE for case-insensitive name search; pg_trgm `%` for fuzzy.
+- Cast Decimal to float in mind (the tool serialises automatically).
+- Never invent column names — use the schema returned by get_db_schema.
+- If execute_sql returns {"error": ...}, apologise and stop.
+- Off-topic questions: politely refuse in Thai without calling any tool.
+- NEVER mention tool names (`get_db_schema`, `execute_sql`), the SQL itself, \
+column names, or any internal jargon in the final answer. Speak naturally as \
+if you simply know the answer.
+- Respond ONLY in Thai. No Chinese/Japanese/Korean characters. Concise: 1-3 sentences.
+"""
+
+_RULES_HYBRID = """\
+You are a stock-management assistant.
+
+You have TWO kinds of tools:
+1. Predefined business tools (preferred for common questions — fast, safe).
+2. get_db_schema + execute_sql (fallback for unusual queries the predefined \
+tools don't cover).
+
+DECISION:
+- If a predefined tool fits the question → use it (DO NOT use execute_sql).
+- If no predefined tool fits → call get_db_schema, then compose a SELECT and \
+call execute_sql.
+
+OTHER RULES:
+- Never invent values; only quote tool/SQL results.
+- For comparisons of specific products: search_products_by_name once per product.
+- For multi-filter (brand+category+warehouse+...): use the `search_products` tool.
+- execute_sql: SELECT only, single statement, with LIMIT, allowed tables only.
+- Off-topic → refuse politely in Thai, no tool call.
+- NEVER mention tool names (`get_low_stock`, `search_products`, `execute_sql`, \
+etc.), function-call syntax, JSON, code blocks, SQL, or internal jargon in the \
+final answer. Speak naturally as if you simply know the answer.
+- Respond ONLY in Thai. No CJK characters. 1-3 sentences.
+"""
+
+_RULES_BY_MODE = {
+    "tools":  _RULES_TOOLS,
+    "sql":    _RULES_SQL,
+    "hybrid": _RULES_HYBRID,
+}
+
+
+def build_system_prompt(registry: ToolRegistry, mode: str = "tools") -> str:
+    rules = _RULES_BY_MODE.get(mode, _RULES_TOOLS)
+    return f"{rules}\nAVAILABLE TOOLS:\n{registry.summary()}\n"
 
 
 # ---- step trace ---------------------------------------------------------
@@ -110,13 +192,15 @@ class Agent:
         registry: ToolRegistry,
         *,
         max_iters: int = 6,
+        mode: str = "tools",
     ) -> None:
         self.llm = llm
         self.registry = registry
         self.max_iters = max_iters
+        self.mode = mode
 
     def ask(self, question: str) -> AgentResult:
-        system_prompt = build_system_prompt(self.registry)
+        system_prompt = build_system_prompt(self.registry, mode=self.mode)
         messages: list[dict] = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": question},
