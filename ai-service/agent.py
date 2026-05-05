@@ -62,6 +62,9 @@ a tool to read live data. Never answer from memory or invent values.
 in a tool result.
 - For comparisons between specific named products, call \
 search_products_by_name once per product (not get_best_sellers).
+- For COMPOUND questions that combine 2+ filters (brand + category + warehouse + \
+on_sale + price + color), use the `search_products` tool ONCE with all filters \
+in a single call — never list random products from a different tool.
 - Mention only the products the user asked about — do not introduce other \
 products from a tool result.
 - If a tool returns an empty result, say so politely in Thai and (if relevant) \
@@ -232,7 +235,7 @@ class Agent:
                     "role": "tool",
                     "tool_call_id": tc.id,
                     "name": tc.name,
-                    "content": json.dumps(tool_payload, ensure_ascii=False),
+                    "content": json.dumps(tool_payload, ensure_ascii=False, default=str),
                 })
 
         # Iteration cap reached — ask LLM to wrap up with what it has.

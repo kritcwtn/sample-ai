@@ -1,38 +1,37 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { listProducts, addProduct, updateProduct, sellProduct, askAI } from './api.js';
+import {
+    listProducts, sellProduct, askAI,
+    getStats, listBrands, listCategories, listWarehouses,
+} from './api.js';
+import {
+    IconBag, IconBox, IconCart, IconChart, IconUsers, IconWallet,
+    IconTag, IconAlert, IconSearch, IconCartSm, IconChat, IconClose, IconArrowUp,
+} from './icons.jsx';
 
 const SUGGESTIONS = [
-    'สินค้าตัวไหนใกล้หมดบ้าง',
-    'สินค้าขายดีที่สุด',
-    'มูลค่าสต็อกรวมเท่าไร',
+    'สินค้าขายดีตอนนี้',
+    'แบรนด์ Apple มีอะไร',
+    'ลูกค้ารายใหญ่ 5 อันดับ',
+    'รายได้เดือนนี้',
 ];
 
 const fmtTHB = (n) =>
     new Intl.NumberFormat('th-TH', { style: 'currency', currency: 'THB' }).format(Number(n) || 0);
 
-// Map a few common color names to swatches; unknown colors fall back to a label only.
+// Map common color names to swatches.
 const COLOR_HEX = {
-    'natural titanium': '#8e8e93',
-    midnight: '#1f1f1f',
-    'space gray': '#3a3a3c',
-    silver: '#c7c7cc',
-    white: '#f5f5f7',
-    black: '#000',
-    starlight: '#f6f0e0',
-    blue: '#0a84ff',
-    pink: '#ff66c4',
-    red: '#ff3b30',
-    green: '#30d158',
-    yellow: '#ffd60a',
-    purple: '#bf5af2',
+    'natural titanium': '#8e8e93', midnight: '#1f1f1f', 'space gray': '#3a3a3c',
+    silver: '#c7c7cc', white: '#f5f5f7', black: '#000', starlight: '#f6f0e0',
+    blue: '#0a84ff', pink: '#ff66c4', red: '#ff3b30', green: '#30d158',
+    yellow: '#ffd60a', purple: '#bf5af2', graphite: '#5e5e5e', gold: '#d4af37',
 };
 
 function ColorTag({ color }) {
     if (!color) return <span className="muted">—</span>;
-    const hex = COLOR_HEX[color.toLowerCase()];
+    const hex = COLOR_HEX[color.toLowerCase()] || '#94a3b8';
     return (
         <span className="color-tag">
-            {hex && <span className="swatch" style={{ background: hex }} />}
+            <span className="swatch" style={{ background: hex }} />
             {color}
         </span>
     );
@@ -41,91 +40,108 @@ function ColorTag({ color }) {
 function PriceCell({ price, discount }) {
     const original = Number(price) || 0;
     const d = Number(discount) || 0;
-    if (d <= 0) {
-        return <span className="money">{fmtTHB(original)}</span>;
-    }
-    const effective = original * (1 - d / 100);
+    if (d <= 0) return <span className="money">{fmtTHB(original)}</span>;
+    const eff = original * (1 - d / 100);
     return (
         <span className="price-with-discount">
             <span className="price-original">{fmtTHB(original)}</span>
-            <span className="price-now money">{fmtTHB(effective)}</span>
-            <span className="badge discount">-{d}%</span>
+            <span className="price-now">
+                <span className="money">{fmtTHB(eff)}</span>
+                <span className="discount-pill">−{Math.round(d)}%</span>
+            </span>
         </span>
     );
 }
 
+function RatingCell({ rating, count }) {
+    if (!rating) return <span className="muted">—</span>;
+    const r = Number(rating);
+    const stars = '★'.repeat(Math.round(r)) + '☆'.repeat(5 - Math.round(r));
+    return (
+        <span className="rating">
+            <span className="stars">{stars}</span>
+            <span className="rating-num">{r.toFixed(1)}</span>
+            <span className="muted">({count})</span>
+        </span>
+    );
+}
+
+const PAGE_SIZES = [10, 20, 50, 100];
+
 export default function App() {
     const [products, setProducts] = useState([]);
-    const [form, setForm] = useState({ name: '', qty: '', price: '', discount: '', color: '' });
-    const [err, setErr] = useState('');
-    const [editing, setEditing] = useState(null);
-    const [filterColor, setFilterColor] = useState('');
+    const [total, setTotal] = useState(0);
+    const [page, setPage] = useState(1);
+    const [pageSize, setPageSize] = useState(20);
 
+    const [stats, setStats] = useState(null);
+    const [brands, setBrands] = useState([]);
+    const [categories, setCategories] = useState([]);
+    const [warehouses, setWarehouses] = useState([]);
+
+    const [filter, setFilter] = useState({
+        brand: '', category: '', warehouse: '', search: '', on_sale: false,
+    });
+    const [err, setErr] = useState('');
+
+    const [sellTarget, setSellTarget] = useState(null);
     const [chatOpen, setChatOpen] = useState(false);
     const [messages, setMessages] = useState([
-        { role: 'bot', text: 'สวัสดี! ผมเป็นผู้ช่วยจัดการสต็อก ถามได้เลยครับ 👋' },
+        { role: 'bot', text: 'สวัสดีครับ! ผมคือ AI Assistant ถามผมได้เกี่ยวกับสต็อก ลูกค้า และยอดขาย 👋' },
     ]);
     const [question, setQuestion] = useState('');
     const [sending, setSending] = useState(false);
     const bodyRef = useRef(null);
 
-    const refresh = async () => {
+    const refresh = async (toPage = page, toSize = pageSize) => {
         try {
-            setProducts(await listProducts());
+            const params = { page: toPage, page_size: toSize };
+            if (filter.brand) params.brand = filter.brand;
+            if (filter.category) params.category = filter.category;
+            if (filter.warehouse) params.warehouse = filter.warehouse;
+            if (filter.search) params.search = filter.search;
+            if (filter.on_sale) params.on_sale = 1;
+            const data = await listProducts(params);
+            setProducts(data.items);
+            setTotal(data.total);
+            setPage(data.page);
+            setPageSize(data.page_size);
         } catch (e) {
             setErr('โหลดสินค้าล้มเหลว: ' + e.message);
         }
     };
 
-    useEffect(() => { refresh(); }, []);
+    const refreshStats = async () => {
+        try { setStats(await getStats()); } catch { /* ignore */ }
+    };
+
+    useEffect(() => {
+        Promise.all([
+            listBrands().then(setBrands).catch(() => {}),
+            listCategories().then(setCategories).catch(() => {}),
+            listWarehouses().then(setWarehouses).catch(() => {}),
+        ]);
+        refresh(1, pageSize);
+        refreshStats();
+    }, []);
+
+    useEffect(() => { refresh(1, pageSize); }, [filter.brand, filter.category, filter.warehouse, filter.on_sale]);
+
     useEffect(() => {
         if (bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
     }, [messages, chatOpen]);
 
-    const colors = useMemo(() => {
-        const set = new Set();
-        products.forEach((p) => p.color && set.add(p.color));
-        return Array.from(set).sort();
-    }, [products]);
-
-    const visibleProducts = useMemo(
-        () => (filterColor ? products.filter((p) => p.color === filterColor) : products),
-        [products, filterColor]
-    );
-
-    const onAdd = async (e) => {
-        e.preventDefault();
-        setErr('');
-        if (!form.name.trim()) return setErr('กรุณากรอกชื่อสินค้า');
-        const q = parseInt(form.qty, 10);
-        if (!Number.isFinite(q) || q < 0) return setErr('qty ต้องเป็นจำนวนเต็ม >= 0');
-        const p = form.price === '' ? 0 : parseFloat(form.price);
-        if (!Number.isFinite(p) || p < 0) return setErr('ราคาต้อง >= 0');
-        const d = form.discount === '' ? 0 : parseFloat(form.discount);
-        if (!Number.isFinite(d) || d < 0 || d > 100) return setErr('ส่วนลดต้องอยู่ระหว่าง 0-100');
-        try {
-            await addProduct({
-                name: form.name.trim(),
-                qty: q,
-                price: p,
-                discount_percent: d,
-                color: form.color.trim() || null,
-            });
-            setForm({ name: '', qty: '', price: '', discount: '', color: '' });
-            await refresh();
-        } catch (e) {
-            setErr('เพิ่มสินค้าล้มเหลว: ' + e.message);
+    const confirmSell = async (product, amount) => {
+        const n = parseInt(amount, 10);
+        if (!Number.isFinite(n) || n <= 0) {
+            setErr('จำนวนไม่ถูกต้อง');
+            return;
         }
-    };
-
-    const onSell = async (p) => {
-        const input = prompt(`ขาย "${p.name}" จำนวนเท่าไร? (เหลือ ${p.qty})`, '1');
-        if (input === null) return;
-        const n = parseInt(input, 10);
-        if (!Number.isFinite(n) || n <= 0) return setErr('จำนวนไม่ถูกต้อง');
         try {
-            await sellProduct(p.id, n);
+            await sellProduct(product.id, n);
+            setSellTarget(null);
             await refresh();
+            await refreshStats();
         } catch (e) {
             const detail = e.response?.data?.error || e.message;
             const avail = e.response?.data?.available;
@@ -150,159 +166,215 @@ export default function App() {
         }
     };
 
-    const totalQty = products.reduce((s, p) => s + p.qty, 0);
-    const totalSold = products.reduce((s, p) => s + (p.sold_count || 0), 0);
-    const lowCount = products.filter((p) => p.qty < 5).length;
-    const onSaleCount = products.filter((p) => Number(p.discount_percent) > 0).length;
-    const stockValue = products.reduce(
-        (s, p) => {
-            const eff = Number(p.price || 0) * (1 - Number(p.discount_percent || 0) / 100);
-            return s + Number(p.qty) * eff;
-        },
-        0
-    );
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const onSearchKey = (e) => { if (e.key === 'Enter') refresh(1, pageSize); };
 
     return (
         <div className="app">
-            <header className="header">
-                <h1>
-                    <span className="logo">📦</span>
-                    Stock Manager
-                </h1>
-            </header>
+            <div className="shell">
+                <header className="header">
+                    <h1>
+                        <span className="logo">📦</span>
+                        Stock Manager
+                    </h1>
+                    <span className="header-meta">
+                        {warehouses.length} warehouses · {brands.length} brands · {categories.length} categories
+                    </span>
+                </header>
 
-            {err && <div className="alert" onClick={() => setErr('')}>{err}</div>}
+                {err && <div className="alert" onClick={() => setErr('')}>{err}</div>}
 
-            <div className="stats">
-                <div className="stat">
-                    <div className="label">รายการสินค้า</div>
-                    <div className="value">{products.length}</div>
-                </div>
-                <div className="stat">
-                    <div className="label">รวมสต็อก</div>
-                    <div className="value">{totalQty}</div>
-                </div>
-                <div className="stat">
-                    <div className="label">ขายไปแล้ว</div>
-                    <div className="value">{totalSold}</div>
-                </div>
-                <div className="stat">
-                    <div className="label">มูลค่าสต็อก (หลังส่วนลด)</div>
-                    <div className="value money">{fmtTHB(stockValue)}</div>
-                </div>
-                <div className="stat">
-                    <div className="label">กำลังลดราคา</div>
-                    <div className={'value' + (onSaleCount > 0 ? ' sale' : '')}>{onSaleCount}</div>
-                </div>
-                <div className="stat">
-                    <div className="label">ใกล้หมด (qty &lt; 5)</div>
-                    <div className={'value' + (lowCount > 0 ? ' warn' : '')}>{lowCount}</div>
-                </div>
+                {stats && (
+                    <div className="stats">
+                        <div className="stat t-blue">
+                            <span className="icon-wrap"><IconBag /></span>
+                            <div className="label">Products</div>
+                            <div className="value">{Number(stats.product_count).toLocaleString()}</div>
+                            <div className="sublabel">Total items</div>
+                        </div>
+                        <div className="stat t-cyan">
+                            <span className="icon-wrap"><IconBox /></span>
+                            <div className="label">In stock</div>
+                            <div className="value">{Number(stats.total_qty).toLocaleString()}</div>
+                            <div className="sublabel">Total units</div>
+                        </div>
+                        <div className="stat t-green">
+                            <span className="icon-wrap"><IconCart /></span>
+                            <div className="label">Sold</div>
+                            <div className="value">{Number(stats.total_sold).toLocaleString()}</div>
+                            <div className="sublabel">Total units</div>
+                        </div>
+                        <div className="stat t-navy">
+                            <span className="icon-wrap"><IconChart /></span>
+                            <div className="label">Stock value</div>
+                            <div className="value money">{fmtTHB(stats.stock_value)}</div>
+                            <div className="sublabel">Total value</div>
+                        </div>
+                        <div className="stat t-peach">
+                            <span className="icon-wrap"><IconUsers /></span>
+                            <div className="label">Customers</div>
+                            <div className="value">{Number(stats.customer_count).toLocaleString()}</div>
+                            <div className="sublabel">Total customers</div>
+                        </div>
+                        <div className="stat t-indigo">
+                            <span className="icon-wrap"><IconWallet /></span>
+                            <div className="label">Revenue 30d</div>
+                            <div className="value money">{fmtTHB(stats.revenue_30d)}</div>
+                            <div className="sublabel">Total revenue</div>
+                        </div>
+                        <div className="stat t-orange">
+                            <span className="icon-wrap"><IconTag /></span>
+                            <div className="label">On sale</div>
+                            <div className="value">{stats.on_sale_count}</div>
+                            <div className="sublabel">Products</div>
+                        </div>
+                        <div className="stat t-rose">
+                            <span className="icon-wrap"><IconAlert /></span>
+                            <div className="label">Low stock</div>
+                            <div className="value">{stats.low_stock_count}</div>
+                            <div className="sublabel">Products</div>
+                        </div>
+                    </div>
+                )}
             </div>
 
-            <section className="card">
-                <div className="card-head">
-                    <h2 className="card-title">รายการสินค้า</h2>
-                    {colors.length > 0 && (
-                        <div className="filter">
-                            <label>สี:</label>
-                            <select
-                                value={filterColor}
-                                onChange={(e) => setFilterColor(e.target.value)}
-                            >
-                                <option value="">ทั้งหมด</option>
-                                {colors.map((c) => (
-                                    <option key={c} value={c}>{c}</option>
+            <div className="shell">
+                <section className="section">
+                    <div className="section-head">
+                        <h2 className="section-title">Products</h2>
+                        <span className="muted">{total.toLocaleString()} items</span>
+                    </div>
+
+                    <div className="filters">
+                        <div className="search-wrap">
+                            <span className="icon-search"><IconSearch size={16} /></span>
+                            <input
+                                className="input"
+                                placeholder="ค้นชื่อ / SKU"
+                                value={filter.search}
+                                onChange={(e) => setFilter({ ...filter, search: e.target.value })}
+                                onKeyDown={onSearchKey}
+                            />
+                        </div>
+                        <select value={filter.brand} onChange={(e) => setFilter({ ...filter, brand: e.target.value })}>
+                            <option value="">All brands</option>
+                            {brands.map((b) => <option key={b.id} value={b.name}>{b.name}</option>)}
+                        </select>
+                        <select value={filter.category} onChange={(e) => setFilter({ ...filter, category: e.target.value })}>
+                            <option value="">All categories</option>
+                            {categories.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
+                        </select>
+                        <select value={filter.warehouse} onChange={(e) => setFilter({ ...filter, warehouse: e.target.value })}>
+                            <option value="">All warehouses</option>
+                            {warehouses.map((w) => <option key={w.id} value={w.code}>{w.name}</option>)}
+                        </select>
+                        <label className="checkbox">
+                            <input
+                                type="checkbox"
+                                checked={filter.on_sale}
+                                onChange={(e) => setFilter({ ...filter, on_sale: e.target.checked })}
+                            />
+                            On sale
+                        </label>
+                    </div>
+
+                    <div className="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>SKU</th>
+                                    <th>Name</th>
+                                    <th>Brand</th>
+                                    <th>Category</th>
+                                    <th>Color</th>
+                                    <th className="num">Price</th>
+                                    <th className="num">Stock</th>
+                                    <th className="num">Sold</th>
+                                    <th>Rating</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {products.map((p) => (
+                                    <tr key={p.id} className={p.qty < 5 ? 'low-stock' : ''}>
+                                        <td><span className="sku">{p.sku}</span></td>
+                                        <td>{p.name}</td>
+                                        <td>{p.brand || <span className="muted">—</span>}</td>
+                                        <td>{p.category || <span className="muted">—</span>}</td>
+                                        <td><ColorTag color={p.color} /></td>
+                                        <td className="num">
+                                            <PriceCell price={p.price} discount={p.discount_percent} />
+                                        </td>
+                                        <td className="num">
+                                            {p.qty === 0
+                                                ? <span className="stock-zero">0</span>
+                                                : p.qty}
+                                        </td>
+                                        <td className="num">{p.sold_count}</td>
+                                        <td><RatingCell rating={p.rating} count={p.review_count} /></td>
+                                        <td className="actions">
+                                            <button
+                                                className="icon-btn"
+                                                title="ขาย"
+                                                onClick={() => setSellTarget(p)}
+                                                disabled={p.qty <= 0}
+                                            >
+                                                <IconCartSm size={15} />
+                                            </button>
+                                        </td>
+                                    </tr>
                                 ))}
+                                {products.length === 0 && (
+                                    <tr><td colSpan={10} className="empty">No products found · try adjusting filters</td></tr>
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div className="pagination">
+                        <div className="pagination-left">
+                            <span>Rows per page:</span>
+                            <select
+                                className="page-size-select"
+                                value={pageSize}
+                                onChange={(e) => {
+                                    const newSize = parseInt(e.target.value, 10);
+                                    setPageSize(newSize);
+                                    refresh(1, newSize);
+                                }}
+                            >
+                                {PAGE_SIZES.map((s) => <option key={s} value={s}>{s}</option>)}
                             </select>
                         </div>
-                    )}
-                </div>
-                <div className="table-wrap">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>ID</th>
-                                <th>ชื่อ</th>
-                                <th>สี</th>
-                                <th className="num">ราคา</th>
-                                <th className="num">คงเหลือ</th>
-                                <th className="num">ขายไปแล้ว</th>
-                                <th>สถานะ</th>
-                                <th style={{ textAlign: 'right' }}>จัดการ</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {visibleProducts.map((p) => (
-                                <tr key={p.id} className={p.qty < 5 ? 'low-stock' : ''}>
-                                    <td>{p.id}</td>
-                                    <td>{p.name}</td>
-                                    <td><ColorTag color={p.color} /></td>
-                                    <td className="num">
-                                        <PriceCell price={p.price} discount={p.discount_percent} />
-                                    </td>
-                                    <td className="num">{p.qty}</td>
-                                    <td className="num">{p.sold_count}</td>
-                                    <td>
-                                        {p.qty < 5
-                                            ? <span className="badge warn">ใกล้หมด</span>
-                                            : <span className="badge ok">ปกติ</span>}
-                                    </td>
-                                    <td className="actions">
-                                        <button className="icon-btn" title="ขาย"
-                                                onClick={() => onSell(p)} disabled={p.qty <= 0}>🛒</button>
-                                        <button className="icon-btn" title="แก้ไข"
-                                                onClick={() => setEditing(p)}>✏️</button>
-                                    </td>
-                                </tr>
-                            ))}
-                            {visibleProducts.length === 0 && (
-                                <tr><td colSpan={8} className="empty">ไม่พบสินค้าที่ตรงกับตัวกรอง</td></tr>
-                            )}
-                        </tbody>
-                    </table>
-                </div>
-            </section>
+                        <div className="pagination-right">
+                            <button onClick={() => refresh(1, pageSize)} disabled={page === 1}>«</button>
+                            <button onClick={() => refresh(page - 1, pageSize)} disabled={page === 1}>‹ Prev</button>
+                            <span>Page {page} of {totalPages}</span>
+                            <button onClick={() => refresh(page + 1, pageSize)} disabled={page >= totalPages}>Next ›</button>
+                            <button onClick={() => refresh(totalPages, pageSize)} disabled={page >= totalPages}>»</button>
+                        </div>
+                    </div>
+                </section>
+            </div>
 
-            <section className="card">
-                <h2 className="card-title">เพิ่มสินค้า</h2>
-                <form className="form-grid" onSubmit={onAdd}>
-                    <input className="input" placeholder="ชื่อสินค้า"
-                           value={form.name}
-                           onChange={(e) => setForm({ ...form, name: e.target.value })} />
-                    <input className="input" placeholder="สี (เช่น Black, Silver)"
-                           value={form.color}
-                           onChange={(e) => setForm({ ...form, color: e.target.value })} />
-                    <input className="input" type="number" min="0" step="0.01" placeholder="ราคา"
-                           value={form.price}
-                           onChange={(e) => setForm({ ...form, price: e.target.value })} />
-                    <input className="input" type="number" min="0" max="100" step="0.5" placeholder="ส่วนลด %"
-                           value={form.discount}
-                           onChange={(e) => setForm({ ...form, discount: e.target.value })} />
-                    <input className="input" type="number" min="0" placeholder="จำนวน"
-                           value={form.qty}
-                           onChange={(e) => setForm({ ...form, qty: e.target.value })} />
-                    <button className="btn" type="submit">+ เพิ่ม</button>
-                </form>
-            </section>
-
-            {editing && (
-                <EditModal
-                    product={editing}
-                    onClose={() => setEditing(null)}
-                    onSaved={async () => { setEditing(null); await refresh(); }}
-                    onError={setErr}
+            {sellTarget && (
+                <SellModal
+                    product={sellTarget}
+                    onClose={() => setSellTarget(null)}
+                    onConfirm={(amount) => confirmSell(sellTarget, amount)}
                 />
             )}
 
             {chatOpen && (
-                <div className="chat-popup" role="dialog" aria-label="AI Chat">
+                <div className="chat-popup" role="dialog">
                     <div className="chat-header">
                         <div>
-                            <div className="title">🤖 AI Assistant</div>
-                            <div className="subtitle">ผู้ช่วยตอบเรื่องสต็อกสินค้า</div>
+                            <div className="title">AI Assistant</div>
+                            <div className="subtitle">ถามเรื่อง สต็อก · ลูกค้า · ยอดขาย</div>
                         </div>
-                        <button className="chat-close" onClick={() => setChatOpen(false)} aria-label="ปิด">✕</button>
+                        <button className="chat-close" onClick={() => setChatOpen(false)}>
+                            <IconClose size={16} />
+                        </button>
                     </div>
                     <div className="chat-body" ref={bodyRef}>
                         {messages.map((m, i) => (
@@ -318,101 +390,92 @@ export default function App() {
                         </div>
                     )}
                     <form className="chat-input" onSubmit={(e) => { e.preventDefault(); send(); }}>
-                        <input placeholder="พิมพ์คำถาม..."
-                               value={question}
-                               onChange={(e) => setQuestion(e.target.value)}
-                               disabled={sending} />
-                        <button className="chat-send" type="submit"
-                                disabled={sending || !question.trim()} aria-label="ส่ง">➤</button>
+                        <input
+                            placeholder="ถาม AI..."
+                            value={question}
+                            onChange={(e) => setQuestion(e.target.value)}
+                            disabled={sending}
+                        />
+                        <button className="chat-send" type="submit" disabled={sending || !question.trim()}>
+                            <IconArrowUp size={16} />
+                        </button>
                     </form>
                 </div>
             )}
 
-            <button
-                className="chat-fab"
-                onClick={() => setChatOpen((o) => !o)}
-                aria-label={chatOpen ? 'ปิด chat' : 'เปิด chat'}
-                title="ถาม AI"
-            >
-                {chatOpen ? '✕' : '💬'}
+            <button className="chat-fab" onClick={() => setChatOpen((o) => !o)}>
+                {chatOpen ? <IconClose size={20} /> : <IconChat size={20} />}
             </button>
         </div>
     );
 }
 
-function EditModal({ product, onClose, onSaved, onError }) {
-    const [form, setForm] = useState({
-        name: product.name,
-        qty: String(product.qty),
-        price: String(product.price ?? 0),
-        discount: String(product.discount_percent ?? 0),
-        color: product.color ?? '',
-    });
-    const [saving, setSaving] = useState(false);
+function SellModal({ product, onClose, onConfirm }) {
+    const [amount, setAmount] = useState('1');
+    const [submitting, setSubmitting] = useState(false);
+    const eff = Number(product.price || 0) * (1 - Number(product.discount_percent || 0) / 100);
+    const n = parseInt(amount, 10);
+    const valid = Number.isFinite(n) && n > 0 && n <= product.qty;
+    const lineTotal = valid ? eff * n : 0;
 
-    const onSave = async (e) => {
-        e.preventDefault();
-        const q = parseInt(form.qty, 10);
-        const p = form.price === '' ? 0 : parseFloat(form.price);
-        const d = form.discount === '' ? 0 : parseFloat(form.discount);
-        if (!form.name.trim()) return onError('กรุณากรอกชื่อสินค้า');
-        if (!Number.isFinite(q) || q < 0) return onError('qty ต้องเป็นจำนวนเต็ม >= 0');
-        if (!Number.isFinite(p) || p < 0) return onError('ราคาต้อง >= 0');
-        if (!Number.isFinite(d) || d < 0 || d > 100) return onError('ส่วนลดต้อง 0-100');
-        setSaving(true);
-        try {
-            await updateProduct(product.id, {
-                name: form.name.trim(),
-                qty: q,
-                price: p,
-                discount_percent: d,
-                color: form.color.trim() || null,
-            });
-            await onSaved();
-        } catch (e) {
-            onError('แก้ไขไม่สำเร็จ: ' + (e.response?.data?.error || e.message));
-        } finally {
-            setSaving(false);
-        }
+    const submit = async (e) => {
+        e?.preventDefault();
+        if (!valid || submitting) return;
+        setSubmitting(true);
+        try { await onConfirm(n); } finally { setSubmitting(false); }
     };
 
     return (
         <div className="modal-backdrop" onClick={onClose}>
             <div className="modal" onClick={(e) => e.stopPropagation()}>
                 <div className="modal-header">
-                    <h3>แก้ไขสินค้า #{product.id}</h3>
-                    <button className="chat-close" onClick={onClose} aria-label="ปิด">✕</button>
+                    <h3>ขายสินค้า</h3>
+                    <button className="chat-close" onClick={onClose} aria-label="ปิด">
+                        <IconClose size={16} />
+                    </button>
                 </div>
-                <form className="modal-body" onSubmit={onSave}>
+                <form className="modal-body" onSubmit={submit}>
+                    <div className="sell-product">
+                        <div className="sell-product-name">{product.name}</div>
+                        <div className="sell-product-meta">
+                            <span className="sku">{product.sku}</span>
+                            {product.color && <ColorTag color={product.color} />}
+                        </div>
+                    </div>
+
+                    <div className="sell-info">
+                        <div>
+                            <div className="muted" style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em' }}>คงเหลือ</div>
+                            <div style={{ fontSize: 18, fontWeight: 700, marginTop: 2 }}>{product.qty}</div>
+                        </div>
+                        <div>
+                            <div className="muted" style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em' }}>ราคา/ชิ้น</div>
+                            <div style={{ fontSize: 18, fontWeight: 700, marginTop: 2 }}>{fmtTHB(eff)}</div>
+                        </div>
+                    </div>
+
                     <label className="field">
-                        <span>ชื่อสินค้า</span>
-                        <input className="input" value={form.name}
-                               onChange={(e) => setForm({ ...form, name: e.target.value })} />
+                        <span>จำนวนที่ต้องการขาย</span>
+                        <input
+                            className="input"
+                            type="number"
+                            min="1"
+                            max={product.qty}
+                            value={amount}
+                            autoFocus
+                            onChange={(e) => setAmount(e.target.value)}
+                        />
                     </label>
-                    <label className="field">
-                        <span>สี</span>
-                        <input className="input" placeholder="เช่น Black, Silver" value={form.color}
-                               onChange={(e) => setForm({ ...form, color: e.target.value })} />
-                    </label>
-                    <label className="field">
-                        <span>ราคา (บาท)</span>
-                        <input className="input" type="number" min="0" step="0.01" value={form.price}
-                               onChange={(e) => setForm({ ...form, price: e.target.value })} />
-                    </label>
-                    <label className="field">
-                        <span>ส่วนลด (%) — 0-100</span>
-                        <input className="input" type="number" min="0" max="100" step="0.5" value={form.discount}
-                               onChange={(e) => setForm({ ...form, discount: e.target.value })} />
-                    </label>
-                    <label className="field">
-                        <span>จำนวนคงเหลือ</span>
-                        <input className="input" type="number" min="0" value={form.qty}
-                               onChange={(e) => setForm({ ...form, qty: e.target.value })} />
-                    </label>
+
+                    <div className="sell-summary">
+                        <span className="muted">ยอดรวม</span>
+                        <span className="sell-total">{fmtTHB(lineTotal)}</span>
+                    </div>
+
                     <div className="modal-actions">
                         <button type="button" className="btn-secondary" onClick={onClose}>ยกเลิก</button>
-                        <button type="submit" className="btn" disabled={saving}>
-                            {saving ? 'กำลังบันทึก...' : 'บันทึก'}
+                        <button type="submit" className="btn" disabled={!valid || submitting}>
+                            {submitting ? 'กำลังขาย...' : `ขาย ${valid ? n : ''} ชิ้น`}
                         </button>
                     </div>
                 </form>
